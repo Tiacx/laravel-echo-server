@@ -82,16 +82,27 @@ export class EchoServer {
      */
     run(options: any): Promise<any> {
         return new Promise((resolve, reject) => {
-            this.options = Object.assign(this.defaultOptions, options);
-            this.startup();
-            this.server = new Server(this.options);
+            try {
+                this.options = Object.assign(this.defaultOptions, options);
+                this.startup();
+                this.server = new Server(this.options);
 
-            this.server.init().then(io => {
-                this.init(io).then(() => {
-                    Log.info('\nServer ready!\n');
-                    resolve(this);
-                }, error => Log.error(error));
-            }, error => Log.error(error));
+                this.server.init().then(io => {
+                    this.init(io).then(() => {
+                        Log.info('\nServer ready!\n');
+                        resolve(this);
+                    }).catch(error => {
+                        Log.error('Failed to initialize: ' + error);
+                        reject(error);
+                    });
+                }).catch(error => {
+                    Log.error('Failed to start server: ' + error);
+                    reject(error);
+                });
+            } catch (error) {
+                Log.error('Failed to run server: ' + error);
+                reject(error);
+            }
         });
     }
 
@@ -204,10 +215,14 @@ export class EchoServer {
      */
     onConnect(): void {
         this.server.io.on('connection', socket => {
-            this.onSubscribe(socket);
-            this.onUnsubscribe(socket);
-            this.onDisconnecting(socket);
-            this.onClientEvent(socket);
+            try {
+                this.onSubscribe(socket);
+                this.onUnsubscribe(socket);
+                this.onDisconnecting(socket);
+                this.onClientEvent(socket);
+            } catch (error) {
+                Log.error('Error handling socket connection: ' + error);
+            }
         });
     }
 
@@ -216,7 +231,12 @@ export class EchoServer {
      */
     onSubscribe(socket: any): void {
         socket.on('subscribe', data => {
-            this.channel.join(socket, data);
+            try {
+                this.channel.join(socket, data);
+            } catch (error) {
+                Log.error('Error on subscribe: ' + error);
+                socket.emit('subscription_error', data.channel, 500);
+            }
         });
     }
 
@@ -225,7 +245,11 @@ export class EchoServer {
      */
     onUnsubscribe(socket: any): void {
         socket.on('unsubscribe', data => {
-            this.channel.leave(socket, data.channel, 'unsubscribed');
+            try {
+                this.channel.leave(socket, data.channel, 'unsubscribed');
+            } catch (error) {
+                Log.error('Error on unsubscribe: ' + error);
+            }
         });
     }
 
@@ -234,11 +258,15 @@ export class EchoServer {
      */
     onDisconnecting(socket: any): void {
         socket.on('disconnecting', (reason) => {
-            socket.rooms.forEach(room => {
-                if (room !== socket.id) {
-                    this.channel.leave(socket, room, reason);
-                }
-            });
+            try {
+                socket.rooms.forEach(room => {
+                    if (room !== socket.id) {
+                        this.channel.leave(socket, room, reason);
+                    }
+                });
+            } catch (error) {
+                Log.error('Error on disconnecting: ' + error);
+            }
         });
     }
 
@@ -247,7 +275,11 @@ export class EchoServer {
      */
     onClientEvent(socket: any): void {
         socket.on('client event', data => {
-            this.channel.clientEvent(socket, data);
+            try {
+                this.channel.clientEvent(socket, data);
+            } catch (error) {
+                Log.error('Error on client event: ' + error);
+            }
         });
     }
 }

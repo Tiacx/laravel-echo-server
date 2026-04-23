@@ -22,6 +22,11 @@ export class Server {
     public io: any;
 
     /**
+     * HTTP server instance for proper cleanup.
+     */
+    private _httpServer: any;
+
+    /**
      * Create a new server instance.
      */
     constructor(private options) { }
@@ -38,7 +43,7 @@ export class Server {
                 Log.success(`Running at ${host} on port ${this.getPort()}`);
 
                 resolve(this.io);
-            }, error => reject(error));
+            }).catch(error => reject(error));
         });
     }
 
@@ -62,10 +67,10 @@ export class Server {
         return new Promise((resolve, reject) => {
             if (this.options.protocol == 'https') {
                 this.secure().then(() => {
-                    resolve(this.httpServer(true));
-                }, error => reject(error));
+                    resolve(this.createServer(true));
+                }).catch(error => reject(error));
             } else {
-                resolve(this.httpServer(false));
+                resolve(this.createServer(false));
             }
         });
     }
@@ -78,17 +83,21 @@ export class Server {
     secure(): Promise<any> {
         return new Promise((resolve, reject) => {
             if (!this.options.sslCertPath || !this.options.sslKeyPath) {
-                reject('SSL paths are missing in server config.');
+                reject(new Error('SSL paths are missing in server config.'));
             }
 
-            Object.assign(this.options, {
-                cert: fs.readFileSync(this.options.sslCertPath),
-                key: fs.readFileSync(this.options.sslKeyPath),
-                ca: (this.options.sslCertChainPath) ? fs.readFileSync(this.options.sslCertChainPath) : '',
-                passphrase: this.options.sslPassphrase,
-            });
+            try {
+                Object.assign(this.options, {
+                    cert: fs.readFileSync(this.options.sslCertPath),
+                    key: fs.readFileSync(this.options.sslKeyPath),
+                    ca: (this.options.sslCertChainPath) ? fs.readFileSync(this.options.sslCertChainPath) : '',
+                    passphrase: this.options.sslPassphrase,
+                });
 
-            resolve(this.options);
+                resolve(this.options);
+            } catch (error) {
+                reject(new Error('Failed to load SSL files: ' + error.message));
+            }
         });
     }
 
@@ -97,13 +106,29 @@ export class Server {
      *
      * @return {any}
      */
-    httpServer(secure: boolean) {
+    createServer(secure: boolean) {
         this.express = express();
+
+        // JSON body parser with size limit
+        this.express.use(express.json({ limit: '1mb' }));
+
+        // Global error handler for Express
+        this.express.use((err: any, req: any, res: any, next: any) => {
+            Log.error('Express error: ' + err.message);
+            res.statusCode = 500;
+            res.json({ error: 'Internal server error' });
+        });
+
         this.express.use((req, res, next) => {
-            for (var header in this.options.headers) {
-                res.setHeader(header, this.options.headers[header]);
+            try {
+                for (var header in this.options.headers) {
+                    res.setHeader(header, this.options.headers[header]);
+                }
+                next();
+            } catch (error) {
+                Log.error('Header error: ' + error.message);
+                next();
             }
-            next();
         });
 
         if (secure) {
@@ -111,6 +136,18 @@ export class Server {
         } else {
             var httpServer = http.createServer(this.express);
         }
+
+        // Store HTTP server reference for proper cleanup
+        this._httpServer = httpServer;
+
+        // Handle server errors
+        httpServer.on('error', (error: any) => {
+            if (error.code === 'EADDRINUSE') {
+                Log.error(`Port ${this.getPort()} is already in use`);
+            } else {
+                Log.error('HTTP server error: ' + error.message);
+            }
+        });
 
         httpServer.listen(this.getPort(), this.options.host);
 

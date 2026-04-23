@@ -1,3 +1,83 @@
+# 2.0.0
+
+## Added
+**EchoServer (`src/echo-server.ts`)**
+- Added `.catch()` handlers to Promises to avoid unhandled promise rejections.
+- Added `try/catch` wrappers around socket event handlers.
+- Added enhanced error handling for `onConnect`, `onSubscribe`, `onUnsubscribe`, `onDisconnecting`, and `onClientEvent`.
+
+**Server (`src/server.ts`)**
+- Added global Express error-handling middleware for centralized 500 error handling.
+- Added `express.json({ limit: '1mb' })` to restrict JSON payload size.
+- Added `try/catch` around SSL file loading.
+- Added `error` event listener on the HTTP server to handle port conflicts and other server errors.
+- Added an `httpServer` reference to support proper resource cleanup.
+
+**RedisSubscriber (`src/subscribers/redis-subscriber.ts`)**
+- Added `connect`, `error`, `reconnecting`, and `close` event listeners to monitor connection state.
+- Added improved error handling for `subscribe` and `unsubscribe`.
+
+**HttpSubscriber (`src/subscribers/http-subscriber.ts`)**
+- Added a request body size limit (max 1MB).
+- Added `try/catch` around JSON parsing.
+- Added error event listeners on request/response objects.
+- Added improved exception handling in `handleData`.
+
+**PresenceChannel (`src/channels/presence-channel.ts`)**
+- Added a concurrency lock via `acquireLock()` to prevent race conditions.
+- Added null/undefined checks for the `members` array.
+- Added `.catch()` handlers to all database operations.
+
+**Channel (`src/channels/channel.ts`)**
+- Added cached/precompiled `_privateRegex` and `_clientEventRegex`.
+- Added `try/catch` wrappers around all operations.
+- Added existence checks for the `socket` instance before use.
+
+**RedisDatabase (`src/database/redis.ts`)**
+- Added `error` event listener on the Redis client.
+- Added JSON parsing error handling for corrupted data.
+- Added `.catch()` handlers to all Redis operations.
+
+---
+
+## Fixed
+**EchoServer (`src/echo-server.ts`)**
+- Fixed potential server crashes by preventing a single socket event handler error from affecting the whole server.
+- Fixed unhandled promise rejection issues in event handling.
+
+**Server (`src/server.ts`)**
+- Fixed missing centralized handling of unexpected server errors (500).
+- Fixed potential denial-of-service risk from unbounded JSON payloads.
+- Fixed unhandled SSL file loading failures.
+- Fixed missing handling of HTTP server errors such as port already in use.
+- Fixed improper cleanup by ensuring `httpServer` is tracked.
+
+**RedisSubscriber (`src/subscribers/redis-subscriber.ts`)**
+- Fixed ungraceful shutdowns by using `quit()` instead of `disconnect()`.
+- Fixed missing error handling during `subscribe`/`unsubscribe` operations.
+
+**HttpSubscriber (`src/subscribers/http-subscriber.ts`)**
+- Fixed potential memory abuse from large request bodies.
+- Fixed crashes caused by malformed JSON in incoming requests.
+- Fixed unhandled I/O errors on request/response streams.
+- Fixed unhandled exceptions in `handleData`.
+
+**PresenceChannel (`src/channels/presence-channel.ts`)**
+- Fixed race conditions via a locking mechanism.
+- Fixed deeply nested Promise chains by refactoring to `async/await` for more reliable error propagation.
+- Fixed possible runtime errors due to missing or null `members` arrays.
+- Fixed unhandled rejections from database operations.
+
+**Channel (`src/channels/channel.ts`)**
+- Fixed performance overhead from repeatedly creating regular expressions.
+- Fixed inefficient checks in `isPrivate()` and `isClientEvent()` by using `Array.prototype.some()`.
+- Fixed potential crashes by wrapping operations in `try/catch` and checking `socket` existence.
+
+**RedisDatabase (`src/database/redis.ts`)**
+- Fixed silent Redis connection failures by listening to `error` events.
+- Fixed crashes caused by corrupted JSON data stored in Redis.
+- Fixed unhandled promise rejections in Redis operations.
+
 # 1.6.3
 
 ## Fixed

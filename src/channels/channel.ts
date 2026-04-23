@@ -24,11 +24,21 @@ export class Channel {
     presence: PresenceChannel;
 
     /**
+     * Regex cache for channel matching
+     */
+    private _privateRegex: RegExp[];
+    private _clientEventRegex: RegExp[];
+
+    /**
      * Create a new channel instance.
      */
     constructor(private io, private options) {
         this.private = new PrivateChannel(options);
         this.presence = new PresenceChannel(io, options);
+
+        // Pre-compile regex patterns for better performance
+        this._privateRegex = this._privateChannels.map(p => new RegExp(p.replace('\*', '.*')));
+        this._clientEventRegex = this._clientEvents.map(e => new RegExp(e.replace('\*', '.*')));
 
         if (this.options.devMode) {
             Log.success('Channels are ready.');
@@ -39,13 +49,17 @@ export class Channel {
      * Join a channel.
      */
     join(socket, data): void {
-        if (data.channel) {
-            if (this.isPrivate(data.channel)) {
-                this.joinPrivate(socket, data);
-            } else {
-                socket.join(data.channel);
-                this.onJoin(socket, data.channel);
+        try {
+            if (data && data.channel) {
+                if (this.isPrivate(data.channel)) {
+                    this.joinPrivate(socket, data);
+                } else {
+                    socket.join(data.channel);
+                    this.onJoin(socket, data.channel);
+                }
             }
+        } catch (error) {
+            Log.error('Error joining channel: ' + error.message);
         }
     }
 
@@ -54,19 +68,27 @@ export class Channel {
      */
     clientEvent(socket, data): void {
         try {
-            data = JSON.parse(data);
-        } catch (e) {
-            data = data;
-        }
-
-        if (data.event && data.channel) {
-            if (this.isClientEvent(data.event) &&
-                this.isPrivate(data.channel) &&
-                this.isInChannel(socket, data.channel)) {
-                this.io.sockets.sockets.get(socket.id)
-                    .broadcast.to(data.channel)
-                    .emit(data.event, data.channel, data.data);
+            if (typeof data === 'string') {
+                try {
+                    data = JSON.parse(data);
+                } catch (e) {
+                    // Keep original string if not valid JSON
+                }
             }
+
+            if (data && data.event && data.channel) {
+                if (this.isClientEvent(data.event) &&
+                    this.isPrivate(data.channel) &&
+                    this.isInChannel(socket, data.channel)) {
+                    const socketInstance = this.io.sockets.sockets.get(socket.id);
+                    if (socketInstance) {
+                        socketInstance.broadcast.to(data.channel)
+                            .emit(data.event, data.channel, data.data);
+                    }
+                }
+            }
+        } catch (error) {
+            Log.error('Error handling client event: ' + error.message);
         }
     }
 
@@ -75,14 +97,18 @@ export class Channel {
      */
     leave(socket: any, channel: string, reason: string): void {
         if (channel) {
-            if (this.isPresence(channel)) {
-                this.presence.leave(socket, channel)
-            }
+            try {
+                if (this.isPresence(channel)) {
+                    this.presence.leave(socket, channel);
+                }
 
-            socket.leave(channel);
+                socket.leave(channel);
 
-            if (this.options.devMode) {
-                Log.info(`[${new Date().toISOString()}] - ${socket.id} left channel: ${channel} (${reason})`);
+                if (this.options.devMode) {
+                    Log.info(`[${new Date().toISOString()}] - ${socket.id} left channel: ${channel} (${reason})`);
+                }
+            } catch (error) {
+                Log.error('Error leaving channel: ' + error.message);
             }
         }
     }
@@ -91,14 +117,7 @@ export class Channel {
      * Check if the incoming socket connection is a private channel.
      */
     isPrivate(channel: string): boolean {
-        let isPrivate = false;
-
-        this._privateChannels.forEach(privateChannel => {
-            let regex = new RegExp(privateChannel.replace('\*', '.*'));
-            if (regex.test(channel)) isPrivate = true;
-        });
-
-        return isPrivate;
+        return this._privateRegex.some(regex => regex.test(channel));
     }
 
     /**
@@ -118,13 +137,15 @@ export class Channel {
             }
 
             this.onJoin(socket, data.channel);
-        }, error => {
+        }).catch(error => {
             if (this.options.devMode) {
-                Log.error(error.reason);
+                Log.error(error.reason || error);
             }
 
-            this.io.sockets.to(socket.id)
-                .emit('subscription_error', data.channel, error.status);
+            const socketInstance = this.io.sockets.to(socket.id);
+            if (socketInstance) {
+                socketInstance.emit('subscription_error', data.channel, error.status || 500);
+            }
         });
     }
 
@@ -148,14 +169,7 @@ export class Channel {
      * Check if client is a client event
      */
     isClientEvent(event: string): boolean {
-        let isClientEvent = false;
-
-        this._clientEvents.forEach(clientEvent => {
-            let regex = new RegExp(clientEvent.replace('\*', '.*'));
-            if (regex.test(event)) isClientEvent = true;
-        });
-
-        return isClientEvent;
+        return this._clientEventRegex.some(regex => regex.test(event));
     }
 
     /**

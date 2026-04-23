@@ -2,6 +2,10 @@ import { Database } from './../database';
 import { Log } from './../log';
 var _ = require("lodash");
 
+// In-memory lock to prevent race conditions on presence channel operations
+const channelLocks = new Map<string, Promise<any>>();
+const lockPromises = new Map<string, any>();
+
 export class PresenceChannel {
     /**
      * Database instance.
@@ -13,6 +17,27 @@ export class PresenceChannel {
      */
     constructor(private io, private options: any) {
         this.db = new Database(options);
+    }
+
+    /**
+     * Acquire a lock for channel operations to prevent race conditions.
+     */
+    private async acquireLock(channel: string): Promise<() => void> {
+        while (lockPromises.has(channel)) {
+            await lockPromises.get(channel);
+        }
+
+        let release: () => void;
+        const lockPromise = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        lockPromises.set(channel, lockPromise);
+
+        return () => {
+            lockPromises.delete(channel);
+            release!();
+        };
     }
 
     /**
@@ -31,6 +56,10 @@ export class PresenceChannel {
                 (members) => {
                     this.removeInactive(channel, members, member).then(
                         (members: any) => {
+                            if (!members || !Array.isArray(members)) {
+                                resolve(false);
+                                return;
+                            }
                             let search = members.filter(
                                 (m) => m.user_id == member.user_id
                             );
@@ -43,7 +72,10 @@ export class PresenceChannel {
                         }
                     );
                 },
-                (error) => Log.error(error)
+                (error) => {
+                    Log.error(error);
+                    resolve(false);
+                }
             );
         });
     }
@@ -67,6 +99,10 @@ export class PresenceChannel {
 
                     resolve(members);
                 })
+                .catch((error) => {
+                    Log.error('Error removing inactive members: ' + error.message);
+                    resolve(members || []);
+                });
         });
     }
 
@@ -74,7 +110,7 @@ export class PresenceChannel {
      * Join a presence channel and emit that they have joined only if it is the
      * first instance of their presence.
      */
-    join(socket: any, channel: string, member: any) {
+    async join(socket: any, channel: string, member: any) {
         if (!member) {
             if (this.options.devMode) {
                 Log.error(
@@ -85,57 +121,61 @@ export class PresenceChannel {
             return;
         }
 
-        this.isMember(channel, member).then(
-            (is_member) => {
-                this.getMembers(channel).then(
-                    (members) => {
-                        members = members || [];
-                        member.socketId = socket.id;
-                        members.push(member);
+        const releaseLock = await this.acquireLock(channel);
 
-                        this.db.set(channel + ":members", members);
+        try {
+            const isMember = await this.isMember(channel, member);
+            const members = (await this.getMembers(channel)) || [];
 
-                        members = _.uniqBy(members.reverse(), "user_id");
+            member.socketId = socket.id;
+            members.push(member);
 
-                        this.onSubscribed(socket, channel, members);
+            this.db.set(channel + ":members", members);
 
-                        if (!is_member) {
-                            this.onJoin(socket, channel, member);
-                        }
-                    },
-                    (error) => Log.error(error)
-                );
-            },
-            () => {
-                Log.error("Error retrieving pressence channel members.");
+            const uniqueMembers = _.uniqBy(members.reverse(), "user_id") || [];
+
+            this.onSubscribed(socket, channel, uniqueMembers);
+
+            if (!isMember) {
+                this.onJoin(socket, channel, member);
             }
-        );
+        } catch (error) {
+            Log.error('Error joining presence channel: ' + error.message);
+        } finally {
+            releaseLock();
+        }
     }
 
     /**
      * Remove a member from a presenece channel and broadcast they have left
      * only if not other presence channel instances exist.
      */
-    leave(socket: any, channel: string): void {
-        this.getMembers(channel).then(
-            (members) => {
-                members = members || [];
-                let member = members.find(
-                    (member) => member.socketId == socket.id
-                );
-                members = members.filter((m) => m.socketId != member.socketId);
+    async leave(socket: any, channel: string): Promise<void> {
+        const releaseLock = await this.acquireLock(channel);
 
-                this.db.set(channel + ":members", members);
+        try {
+            const members = (await this.getMembers(channel)) || [];
+            let member = members.find(
+                (member) => member.socketId == socket.id
+            );
 
-                this.isMember(channel, member).then((is_member) => {
-                    if (!is_member) {
-                        delete member.socketId;
-                        this.onLeave(channel, member);
-                    }
-                });
-            },
-            (error) => Log.error(error)
-        );
+            if (!member) {
+                return;
+            }
+
+            const filteredMembers = members.filter((m) => m.socketId != member.socketId);
+            this.db.set(channel + ":members", filteredMembers);
+
+            const stillMember = await this.isMember(channel, member);
+            if (!stillMember) {
+                delete member.socketId;
+                this.onLeave(channel, member);
+            }
+        } catch (error) {
+            Log.error('Error leaving presence channel: ' + error.message);
+        } finally {
+            releaseLock();
+        }
     }
 
     /**

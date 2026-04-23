@@ -130,7 +130,7 @@ export class HttpApi {
 
         if (this.channel.isPresence(channelName)) {
             this.channel.presence.getMembers(channelName).then(members => {
-                result['user_count'] = _.uniqBy(members, 'user_id').length;
+                result['user_count'] = (_.uniqBy(members || [], 'user_id') || []).length;
 
                 res.json(result);
             });
@@ -160,7 +160,7 @@ export class HttpApi {
         this.channel.presence.getMembers(channelName).then(members => {
             let users = [];
 
-            _.uniqBy(members, 'user_id').forEach((member: any) => {
+            (_.uniqBy(members || [], 'user_id') || []).forEach((member: any) => {
                 users.push({ id: member.user_id, user_info: member.user_info });
             });
 

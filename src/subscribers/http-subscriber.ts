@@ -20,13 +20,27 @@ export class HttpSubscriber implements Subscriber {
             // Broadcast a message to a channel
             this.express.post('/apps/:appId/events', (req, res) => {
                 let body: any = [];
-                res.on('error', (error) => {
-                    if (this.options.devMode) {
-                        Log.error(error);
-                    }
+
+                req.on('error', (error) => {
+                    Log.error('HTTP request error: ' + error.message);
+                    res.statusCode = 400;
+                    res.json({ error: 'Bad request' });
                 });
 
-                req.on('data', (chunk) => body.push(chunk))
+                res.on('error', (error) => {
+                    Log.error('HTTP response error: ' + error.message);
+                });
+
+                req.on('data', (chunk) => {
+                    // Limit body size to prevent memory attacks
+                    if (body.length > 100 || Buffer.concat(body).length > 1024 * 1024) {
+                        res.statusCode = 413;
+                        res.json({ error: 'Payload too large' });
+                        req.destroy();
+                        return;
+                    }
+                    body.push(chunk);
+                })
                     .on('end', () => this.handleData(req, res, body, callback));
             });
 
@@ -64,7 +78,11 @@ export class HttpSubscriber implements Subscriber {
      * @return {boolean}
      */
     handleData(req, res, body, broadcast): boolean {
-        body = JSON.parse(Buffer.concat(body).toString());
+        try {
+            body = JSON.parse(Buffer.concat(body).toString());
+        } catch (e) {
+            return this.badResponse(req, res, 'Invalid JSON body');
+        }
 
         if ((body.channels || body.channel) && body.name && body.data) {
 
@@ -85,7 +103,12 @@ export class HttpSubscriber implements Subscriber {
                 Log.info("Event: " + message.event);
             }
 
-            channels.forEach(channel => broadcast(channel, message));
+            try {
+                channels.forEach(channel => broadcast(channel, message));
+            } catch (e) {
+                Log.error('Broadcast error: ' + e.message);
+                return this.badResponse(req, res, 'Broadcast failed');
+            }
         } else {
             return this.badResponse(
                 req,
